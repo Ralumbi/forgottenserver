@@ -71,18 +71,17 @@ bool Monsters::loadFromXml(bool reloading /*= false*/)
 	for (auto monsterNode : doc.child("monsters").children()) {
 		std::string name = asLowerCaseString(monsterNode.attribute("name").as_string());
 		std::string file = "data/monster/" + std::string(monsterNode.attribute("file").as_string());
-		auto forceLoad = g_config.getBoolean(ConfigManager::FORCE_MONSTERTYPE_LOAD);
-		if (forceLoad) {
-			loadMonster(file, name, true);
-			continue;
-		}
+		unloadedMonsters.emplace(name, file);
+	}
 
-		if (reloading && monsters.find(name) != monsters.end()) {
-			loadMonster(file, name, true);
-		} else {
-			unloadedMonsters.emplace(name, file);
+	bool forceLoad = g_config.getBoolean(ConfigManager::FORCE_MONSTERTYPE_LOAD);
+
+	for (auto it : unloadedMonsters) {
+		if (forceLoad || reloading && monsters.find(it.first) != monsters.end()) {
+			loadMonster(it.second, it.first, reloading);
 		}
 	}
+
 	return true;
 }
 
@@ -426,12 +425,12 @@ bool Monsters::deserializeSpell(const pugi::xml_node& node, spellBlock_t& sb, co
 		} else if (tmpName == "energyfield") {
 			combat->setParam(COMBAT_PARAM_CREATEITEM, ITEM_ENERGYFIELD_PVP);
 		} else if (tmpName == "firecondition" || tmpName == "energycondition" ||
-		           tmpName == "earthcondition" || tmpName == "poisoncondition" ||
-		           tmpName == "icecondition" || tmpName == "freezecondition" ||
-		           tmpName == "deathcondition" || tmpName == "cursecondition" ||
-		           tmpName == "holycondition" || tmpName == "dazzlecondition" ||
-		           tmpName == "drowncondition" || tmpName == "bleedcondition" ||
-		           tmpName == "physicalcondition") {
+				   tmpName == "earthcondition" || tmpName == "poisoncondition" ||
+				   tmpName == "icecondition" || tmpName == "freezecondition" ||
+				   tmpName == "deathcondition" || tmpName == "cursecondition" ||
+				   tmpName == "holycondition" || tmpName == "dazzlecondition" ||
+				   tmpName == "drowncondition" || tmpName == "bleedcondition" ||
+				   tmpName == "physicalcondition") {
 			ConditionType_t conditionType = CONDITION_NONE;
 			uint32_t tickInterval = 2000;
 
@@ -631,6 +630,11 @@ bool Monsters::deserializeSpell(MonsterSpell* spell, spellBlock_t& sb, const std
 			combat->setParam(COMBAT_PARAM_BLOCKSHIELD, 1);
 			combat->setOrigin(ORIGIN_MELEE);
 		} else if (tmpName == "combat") {
+			if (spell->combatType == COMBAT_UNDEFINEDDAMAGE) {
+				std::cout << "[Warning - Monsters::deserializeSpell] - " << description << " - spell has undefined damage" << std::endl;
+				combat->setParam(COMBAT_PARAM_TYPE, COMBAT_PHYSICALDAMAGE);
+			}
+
 			if (spell->combatType == COMBAT_PHYSICALDAMAGE) {
 				combat->setParam(COMBAT_PARAM_BLOCKARMOR, 1);
 				combat->setOrigin(ORIGIN_RANGED);
@@ -879,6 +883,11 @@ MonsterType* Monsters::loadMonster(const std::string& file, const std::string& m
 		} else {
 			std::cout << "[Error - Monsters::loadMonster] Missing health max. " << file << std::endl;
 		}
+
+		if (mType->info.health > mType->info.healthMax) {
+			mType->info.health = mType->info.healthMax;
+			std::cout << "[Warning - Monsters::loadMonster] Health now is greater than health max." << file << std::endl;
+		}
 	}
 
 	if ((node = monsterNode.child("flags"))) {
@@ -937,8 +946,8 @@ MonsterType* Monsters::loadMonster(const std::string& file, const std::string& m
 			}
 		}
 
-		//if a monster can push creatures,
-		// it should not be pushable
+		// if a monster can push creatures,
+		// it should not be pushable.
 		if (mType->info.canPushCreatures) {
 			mType->info.pushable = false;
 		}
@@ -1385,7 +1394,12 @@ bool Monsters::loadLootItem(const pugi::xml_node& node, LootBlock& lootBlock)
 	}
 
 	if ((attr = node.attribute("countmax"))) {
-		lootBlock.countmax = std::max<int32_t>(1, pugi::cast<int32_t>(attr.value()));
+		int32_t lootCountMax = pugi::cast<int32_t>(attr.value());
+		if (lootCountMax > 100) {
+			std::cout << "[Warning - Monsters::loadMonster] Invalid \"countmax\" "<< lootCountMax <<" used for loot, the max allowed value is 100. " << std::endl;
+			return false;
+		}
+		lootBlock.countmax = std::max<int32_t>(1, lootCountMax);
 	} else {
 		lootBlock.countmax = 1;
 	}
@@ -1442,12 +1456,12 @@ MonsterType* Monsters::getMonsterType(const std::string& name, bool loadFromFile
 
 	auto it = monsters.find(lowerCaseName);
 	if (it == monsters.end()) {
-		auto it2 = unloadedMonsters.find(lowerCaseName);
-		if (it2 == unloadedMonsters.end()) {
+		if (!loadFromFile) {
 			return nullptr;
 		}
 
-		if (!loadFromFile) {
+		auto it2 = unloadedMonsters.find(lowerCaseName);
+		if (it2 == unloadedMonsters.end()) {
 			return nullptr;
 		}
 
